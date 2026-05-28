@@ -1,0 +1,12 @@
+lbIp: 172.18.0.3
+generalLB:
+  protocol: tcp
+  nodesIp:
+    - 172.18.0.4
+    - 172.18.0.5
+  services:
+    - name: http
+      lbPort: 80
+      nodePort: 31194
+      healthCheck:
+        probe: http
