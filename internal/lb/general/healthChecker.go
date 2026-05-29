@@ -1,9 +1,13 @@
 package general
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"net/http"
+)
 
 type healthChecker interface {
-	check(ctx context.Context, ip string) error
+	check(ctx context.Context, destination string) error
 }
 
 type httpHeathChecker struct {
@@ -20,6 +24,25 @@ func newHttpHeathChecker(path string, expectedStatus int, httpHeaders map[string
 	}
 }
 
-func (h httpHeathChecker) check(ctx context.Context, ip string) error {
+func (h httpHeathChecker) check(ctx context.Context, destination string) error {
+	url := fmt.Sprintf("http://%s%s", destination, h.path)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return err
+	}
+
+	for k, v := range h.httpHeaders {
+		req.Header.Set(k, v)
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != h.expectedStatus {
+		return fmt.Errorf("expected http status %d, got %d", h.expectedStatus, resp.StatusCode)
+	}
+
 	return nil
 }
