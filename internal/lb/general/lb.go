@@ -2,11 +2,9 @@ package general
 
 import (
 	"context"
-	"fmt"
 	"kubelb/configs"
 	"kubelb/internal/iptable"
 	"log/slog"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -17,6 +15,7 @@ type Lb struct {
 	loadBalancerIp string
 	nodes          []*node
 
+	svcName  string
 	protocol string
 	port     int
 	nodePort int
@@ -42,20 +41,21 @@ func NewGeneralLb(loadBalancerIp string, protocol string, nodesIp []string, svc 
 		loadBalancerIp:   loadBalancerIp,
 		nodes:            make([]*node, 0, len(nodesIp)),
 		protocol:         protocol,
+		svcName:          svc.Name,
 		port:             svc.LbPort,
 		nodePort:         svc.NodePort,
 		interval:         svc.HealthCheck.Interval,
 		successThreshold: svc.HealthCheck.SuccessThreshold,
 		failureThreshold: svc.HealthCheck.FailureThreshold,
 
-		healthChecker: newHttpHeathChecker(svc.HealthCheck.Path, svc.HealthCheck.ExpectedStatus, svc.HealthCheck.HttpHeaders),
-		iptable:       iptable.NewIptable(),
+		healthChecker: newHttpHeathChecker(svc.HealthCheck.Port, svc.HealthCheck.Path, svc.HealthCheck.ExpectedStatus, svc.HealthCheck.HttpHeaders),
+		iptable:       iptable.NewIptable(logger.With("service", "general-lb.iptable")),
 	}
 
 	for _, b := range nodesIp {
 		lb.nodes = append(lb.nodes, &node{
 			ip:      b,
-			healthy: true, // todo: set it to false
+			healthy: false,
 		})
 	}
 
@@ -65,37 +65,33 @@ func NewGeneralLb(loadBalancerIp string, protocol string, nodesIp []string, svc 
 }
 
 func (lb *Lb) loop() {
-	lb.logger.Info("iteration is starting...")
+	ticker := time.NewTicker(lb.interval)
+	defer ticker.Stop()
 
-	var wg sync.WaitGroup
-	ctx, cancel := context.WithTimeout(context.Background(), lb.interval)
-	defer cancel()
+	for range ticker.C {
+		lb.logger.Info("new synchronization is starting...")
 
-	for _, node := range lb.nodes {
-		wg.Add(1)
-		go lb.checkNode(ctx, node, &wg)
+		var wg sync.WaitGroup
+		ctx, cancel := context.WithTimeout(context.Background(), lb.interval)
+
+		for _, node := range lb.nodes {
+			wg.Add(1)
+			go lb.checkNode(ctx, node, &wg)
+		}
+
+		wg.Wait()
+		cancel()
+		lb.logger.Info("synchronization completed")
 	}
-	wg.Wait()
-	lb.logger.Info("iteration completed")
 }
 
 func (lb *Lb) checkNode(ctx context.Context, n *node, wg *sync.WaitGroup) {
 	defer wg.Done()
-
+	status := n.healthy
 	lb.healthCheck(ctx, n)
-
-	if n.healthy {
-		err := lb.addNode(n.ip)
-		if err != nil {
-			lb.logger.Error(err.Error(), "node", n.ip)
-		}
-	} else {
-		err := lb.deleteRule(n.ip)
-		if err != nil {
-			lb.logger.Error(err.Error(), "node", n.ip)
-		}
+	if status != n.healthy {
+		lb.sync()
 	}
-
 }
 
 func (lb *Lb) healthCheck(ctx context.Context, n *node) {
@@ -113,39 +109,40 @@ func (lb *Lb) healthCheck(ctx context.Context, n *node) {
 		n.healthy = false
 		n.failCount = 0
 		n.successCount = 0
-	} else if !n.healthy && n.successCount > lb.successThreshold {
+		return
+	}
+
+	if !n.healthy && n.successCount > lb.successThreshold {
 		n.healthy = true
 		n.successCount = 0
 		n.failCount = 0
 	}
 }
 
-func (lb *Lb) addNode(ip string) error {
-	destination := fmt.Sprintf("%s:%d", ip, lb.nodePort)
-	err := lb.iptable.Exec(
-		"-t", "nat",
-		"-I", "PREROUTING",
-		"-p", lb.protocol,
-		"--dport", strconv.Itoa(lb.port),
-		"-j", "DNAT",
-		"--to-destination", destination)
-
-	if err != nil {
-		return err
+func (lb *Lb) sync() {
+	ips := make([]string, 0, len(lb.nodes))
+	for _, n := range lb.nodes {
+		if n.healthy {
+			ips = append(ips, n.ip)
+		}
 	}
 
-	err = lb.iptable.Exec(
-		"-t", "nat",
-		"-I", "POSTROUTING",
-		"-p", lb.protocol,
-		"--dport", strconv.Itoa(lb.nodePort),
-		"-j", "SNAT",
-		"--to-source", lb.loadBalancerIp)
+	if len(ips) == 0 {
+		lb.logger.Info("no healthy nodes found")
+		return
+	}
 
-	lb.logger.Info("add node", "node", ip)
-	return err
-}
+	lb.logger.Info("applying nodes", "ips", ips)
+	err := lb.iptable.Sync(&iptable.SyncRequest{
+		Svc:      lb.svcName,
+		Ips:      ips,
+		LbIp:     lb.loadBalancerIp,
+		Protocol: lb.protocol,
+		Port:     lb.port,
+		NodePort: lb.nodePort,
+	})
 
-func (lb *Lb) deleteRule(ip string) error {
-	return nil
+	if err != nil {
+		lb.logger.Warn("Failed to apply nodes", "err", err)
+	}
 }

@@ -7,25 +7,27 @@ import (
 )
 
 type healthChecker interface {
-	check(ctx context.Context, destination string) error
+	check(ctx context.Context, ip string) error
 }
 
 type httpHeathChecker struct {
+	port           int
 	path           string
 	expectedStatus int
 	httpHeaders    map[string]string
 }
 
-func newHttpHeathChecker(path string, expectedStatus int, httpHeaders map[string]string) healthChecker {
+func newHttpHeathChecker(port int, path string, expectedStatus int, httpHeaders map[string]string) healthChecker {
 	return &httpHeathChecker{
+		port,
 		path,
 		expectedStatus,
 		httpHeaders,
 	}
 }
 
-func (h httpHeathChecker) check(ctx context.Context, destination string) error {
-	url := fmt.Sprintf("http://%s%s", destination, h.path)
+func (h httpHeathChecker) check(ctx context.Context, ip string) error {
+	url := fmt.Sprintf("http://%s:%d%s", ip, h.port, h.path)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return err

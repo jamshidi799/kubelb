@@ -17,6 +17,7 @@ type Service struct {
 
 type HealthCheck struct {
 	Probe            string
+	Port             int
 	Path             string
 	ExpectedStatus   int
 	HttpHeaders      map[string]string

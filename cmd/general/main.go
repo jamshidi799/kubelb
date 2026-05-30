@@ -16,9 +16,9 @@ func main() {
 	}
 	log.Printf("config: %+v\n", c)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	for _, svc := range c.GeneralLB.Services {
-		general.NewGeneralLb(c.LbIp, c.GeneralLB.Protocol, c.GeneralLB.NodesIp, &svc, logger.WithGroup(svc.Name))
+		general.NewGeneralLb(c.LbIp, c.GeneralLB.Protocol, c.GeneralLB.NodesIp, &svc, logger.With("service", svc.Name))
 	}
 
 	ch := time.After(100 * time.Second)
