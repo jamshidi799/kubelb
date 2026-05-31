@@ -1,9 +1,8 @@
-package general
+package nat
 
 import (
 	"context"
 	"kubelb/configs"
-	"kubelb/internal/iptable"
 	"log/slog"
 	"sync"
 	"time"
@@ -25,7 +24,7 @@ type Lb struct {
 	failureThreshold int
 
 	healthChecker healthChecker
-	iptable       iptable.Iptable
+	iptable       iptableManager
 }
 
 type node struct {
@@ -35,7 +34,7 @@ type node struct {
 	failCount    int
 }
 
-func NewGeneralLb(loadBalancerIp string, protocol string, nodesIp []string, svc *configs.Service, logger *slog.Logger) *Lb {
+func NewNatLb(loadBalancerIp string, protocol string, nodesIp []string, svc *configs.Service, logger *slog.Logger) *Lb {
 	lb := &Lb{
 		logger:           logger,
 		loadBalancerIp:   loadBalancerIp,
@@ -49,7 +48,7 @@ func NewGeneralLb(loadBalancerIp string, protocol string, nodesIp []string, svc 
 		failureThreshold: svc.HealthCheck.FailureThreshold,
 
 		healthChecker: newHttpHeathChecker(svc.HealthCheck.Port, svc.HealthCheck.Path, svc.HealthCheck.ExpectedStatus, svc.HealthCheck.HttpHeaders),
-		iptable:       iptable.NewIptable(logger.With("service", "general-lb.iptable")),
+		iptable:       newIptableManager(logger.With("service", "general-lb.iptableImpl")),
 	}
 
 	for _, b := range nodesIp {
@@ -133,13 +132,13 @@ func (lb *Lb) sync() {
 	}
 
 	lb.logger.Info("applying nodes", "ips", ips)
-	err := lb.iptable.Sync(&iptable.SyncRequest{
-		Svc:      lb.svcName,
-		Ips:      ips,
-		LbIp:     lb.loadBalancerIp,
-		Protocol: lb.protocol,
-		Port:     lb.port,
-		NodePort: lb.nodePort,
+	err := lb.iptable.sync(&syncRequest{
+		svc:      lb.svcName,
+		ips:      ips,
+		lbIp:     lb.loadBalancerIp,
+		protocol: lb.protocol,
+		port:     lb.port,
+		nodePort: lb.nodePort,
 	})
 
 	if err != nil {

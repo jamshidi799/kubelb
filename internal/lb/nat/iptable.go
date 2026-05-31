@@ -1,4 +1,4 @@
-package iptable
+package nat
 
 import (
 	"bytes"
@@ -14,76 +14,76 @@ const (
 	postRoutingChainNameFormat = "POST-SVC-%s"
 )
 
-type Iptable interface {
-	Sync(req *SyncRequest) error
+type iptableManager interface {
+	sync(req *syncRequest) error
 }
 
-type SyncRequest struct {
-	Svc      string
-	Ips      []string
-	LbIp     string
-	Protocol string
-	Port     int
-	NodePort int
+type syncRequest struct {
+	svc      string
+	ips      []string
+	lbIp     string
+	protocol string
+	port     int
+	nodePort int
 }
 
-type iptable struct {
+type iptableImpl struct {
 	logger *slog.Logger
 }
 
-func NewIptable(logger *slog.Logger) Iptable {
-	return &iptable{
+func newIptableManager(logger *slog.Logger) iptableManager {
+	return &iptableImpl{
 		logger: logger,
 	}
 }
 
-func (i *iptable) Sync(req *SyncRequest) error {
+func (i *iptableImpl) sync(req *syncRequest) error {
 	var b strings.Builder
 
 	b.WriteString("*nat\n")
 
-	preRoutingChain := fmt.Sprintf(preRoutingChainNameFormat, req.Svc)
+	preRoutingChain := fmt.Sprintf(preRoutingChainNameFormat, req.svc)
 	err := i.runIptables("-t", "nat", "-N", preRoutingChain)
 	if err != nil {
 		i.logger.Warn(err.Error())
 	}
 
-	err = i.runIptables("-t", "nat", "-C", "PREROUTING", "-p", req.Protocol, "--dport", strconv.Itoa(req.Port), "-j", preRoutingChain)
+	err = i.runIptables("-t", "nat", "-C", "PREROUTING", "-p", req.protocol, "--dport", strconv.Itoa(req.port), "-j", preRoutingChain)
 	if err != nil {
-		appendToPreRouting := fmt.Sprintf("-A PREROUTING -p %s --dport %d -j %s\n", req.Protocol, req.Port, preRoutingChain)
+		appendToPreRouting := fmt.Sprintf("-A PREROUTING -p %s --dport %d -j %s\n", req.protocol, req.port, preRoutingChain)
 		b.WriteString(appendToPreRouting)
 	}
 	b.WriteString(i.flush(preRoutingChain))
 
-	postRoutingChain := fmt.Sprintf(postRoutingChainNameFormat, req.Svc)
+	postRoutingChain := fmt.Sprintf(postRoutingChainNameFormat, req.svc)
 	err = i.runIptables("-t", "nat", "-N", postRoutingChain)
 	if err != nil {
 		i.logger.Warn(err.Error())
 	}
 
-	err = i.runIptables("-t", "nat", "-C", "POSTROUTING", "-p", req.Protocol, "--dport", strconv.Itoa(req.NodePort), "-j", postRoutingChain)
+	err = i.runIptables("-t", "nat", "-C", "POSTROUTING", "-p", req.protocol, "--dport", strconv.Itoa(req.nodePort), "-j", postRoutingChain)
 	if err != nil {
-		appendToPostRouting := fmt.Sprintf("-A POSTROUTING -p %s --dport %d -j %s\n", req.Protocol, req.NodePort, postRoutingChain)
+		appendToPostRouting := fmt.Sprintf("-A POSTROUTING -p %s --dport %d -j %s\n", req.protocol, req.nodePort, postRoutingChain)
 		b.WriteString(appendToPostRouting)
 	}
 	b.WriteString(i.flush(postRoutingChain))
 
-	count := len(req.Ips)
-	for i, ip := range req.Ips {
+	count := len(req.ips)
+	for i, ip := range req.ips {
 		var dnat string
 		if i == count-1 {
 			dnat = fmt.Sprintf("-A %s -p %s --dport %d -j DNAT --to-destination %s:%d\n",
-				preRoutingChain, req.Protocol, req.Port, ip, req.NodePort)
+				preRoutingChain, req.protocol, req.port, ip, req.nodePort)
 		} else {
 			prob := 1.0 / float64(count-i)
 			dnat = fmt.Sprintf("-A %s -p %s --dport %d -m statistic --mode random --probability %.6f -j DNAT --to-destination %s:%d\n",
-				preRoutingChain, req.Protocol, req.Port, prob, ip, req.NodePort)
+				preRoutingChain, req.protocol, req.port, prob, ip, req.nodePort)
 		}
 
 		b.WriteString(dnat)
 	}
 
-	snat := fmt.Sprintf("-A %s -p %s --dport %d -j SNAT --to-source %s\n", postRoutingChain, req.Protocol, req.NodePort, req.LbIp)
+	snat := fmt.Sprintf("-A %s -p %s --dport %d -j SNAT --to-source %s\n", postRoutingChain, req.protocol, req.nodePort, req.lbIp)
 	b.WriteString(snat)
 
 	b.WriteString("COMMIT\n")
@@ -92,8 +92,8 @@ func (i *iptable) Sync(req *SyncRequest) error {
 	return i.runIptablesRestore(rules)
 }
 
-func (i *iptable) runIptablesRestore(rules string) error {
-	i.logger.Debug("applying iptable-restore", "rules", rules)
+func (i *iptableImpl) runIptablesRestore(rules string) error {
+	i.logger.Debug("applying iptableImpl-restore", "rules", rules)
 
 	cmd := exec.Command("iptables-restore", "--noflush")
 	cmd.Stdin = strings.NewReader(rules)
@@ -107,7 +107,7 @@ func (i *iptable) runIptablesRestore(rules string) error {
 	return nil
 }
 
-func (i *iptable) runIptables(rule ...string) error {
+func (i *iptableImpl) runIptables(rule ...string) error {
 	cmd := exec.Command("iptables", rule...)
 
 	var stderr bytes.Buffer
@@ -119,6 +119,6 @@ func (i *iptable) runIptables(rule ...string) error {
 	return nil
 }
 
-func (i *iptable) flush(chain string) string {
+func (i *iptableImpl) flush(chain string) string {
 	return fmt.Sprintf("-F %s\n", chain)
 }
