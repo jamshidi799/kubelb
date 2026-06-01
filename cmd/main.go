@@ -2,7 +2,7 @@ package main
 
 import (
 	"kubelb/configs"
-	"kubelb/internal/lb/general"
+	"kubelb/internal/lb/nat"
 	"log"
 	"log/slog"
 	"os"
@@ -18,7 +18,7 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	for _, svc := range c.GeneralLB.Services {
-		general.NewGeneralLb(c.LbIp, c.GeneralLB.Protocol, c.GeneralLB.NodesIp, &svc, logger.With("service", svc.Name))
+		nat.NewNatLb(c.LbIp, c.GeneralLB.Protocol, c.GeneralLB.NodesIp, &svc, logger.With("service", svc.Name))
 	}
 
 	ch := time.After(100 * time.Second)
