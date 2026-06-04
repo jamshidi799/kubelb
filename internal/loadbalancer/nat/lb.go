@@ -47,11 +47,17 @@ func (lb *natLB) Update(svc *v1.Service) {
 }
 
 func (lb *natLB) Delete(svc *v1.Service) {
-	//TODO implement me
-	panic("implement me")
+	s, ok := lb.services[svc.Name]
+	if !ok {
+		lb.logger.Warn("invalid delete request. service not found.",
+			slog.Group("service", "namespace", svc.Namespace, "service", svc.Name))
+	}
+	delete(lb.services, svc.Name)
+	s.stopCh <- struct{}{}
 }
 
 func (lb *natLB) AddNode(ip string) {
+	lb.logger.Info("adding node to lb", "ip", ip)
 	lb.nodes[ip] = ip
 	for _, svc := range lb.services {
 		svc.addNode(ip)
@@ -59,8 +65,11 @@ func (lb *natLB) AddNode(ip string) {
 }
 
 func (lb *natLB) DeleteNode(ip string) {
-	//TODO implement me
-	panic("implement me")
+	lb.logger.Info("deleting node", "ip", ip)
+	delete(lb.nodes, ip)
+	for _, svc := range lb.services {
+		delete(svc.nodes, ip)
+	}
 }
 
 func (lb *natLB) syncService(service *service) {
@@ -84,6 +93,15 @@ func (lb *natLB) syncService(service *service) {
 		wg.Wait()
 		cancel()
 		lb.logger.Info("synchronization completed")
+
+		select {
+		case <-service.stopCh:
+			lb.logger.Info("stopping sync loop",
+				slog.Group("service", "namespace", service.svc.Namespace, "name", service.svc.Name))
+			break
+		default:
+
+		}
 	}
 }
 
