@@ -40,56 +40,97 @@ func newIptableManager(logger *slog.Logger) iptableManager {
 func (i *iptableImpl) sync(req *request) error {
 	var b strings.Builder
 
-	b.WriteString("*nat\n")
+	i.setTable(b)
+	i.preRouting(b, req)
+	i.postRouting(b, req)
+	i.commit(b)
 
-	preRoutingChain := fmt.Sprintf(preRoutingChainNameFormat, req.serviceName)
-	err := i.runIptables("-t", "nat", "-N", preRoutingChain)
+	rules := b.String()
+	return i.runIptablesRestore(rules)
+}
+
+func (i *iptableImpl) setTable(b strings.Builder) {
+	rule := "*nat\n"
+	b.WriteString(rule)
+}
+
+func (i *iptableImpl) preRouting(b strings.Builder, req *request) {
+	chain := i.preRoutingChain(req)
+	i.runCreateChain(chain)
+	i.addChainToPreRouting(b, req, chain)
+	i.flush(b, chain)
+	i.dnat(b, req, chain)
+}
+
+func (i *iptableImpl) postRouting(b strings.Builder, req *request) {
+	chain := i.postRoutingChain(req)
+	i.runCreateChain(chain)
+	i.addChainToPostRouting(b, req, chain)
+	i.flush(b, chain)
+	i.snat(b, req, chain)
+}
+
+func (i *iptableImpl) commit(b strings.Builder) {
+	rule := "COMMIT\n"
+	b.WriteString(rule)
+}
+
+func (i *iptableImpl) preRoutingChain(req *request) string {
+	return fmt.Sprintf(preRoutingChainNameFormat, req.serviceName)
+}
+
+func (i *iptableImpl) postRoutingChain(req *request) string {
+	return fmt.Sprintf(postRoutingChainNameFormat, req.serviceName)
+}
+
+func (i *iptableImpl) flush(builder strings.Builder, chain string) {
+	rule := fmt.Sprintf("-F %s\n", chain)
+	builder.WriteString(rule)
+}
+
+func (i *iptableImpl) runCreateChain(chain string) {
+	err := i.runIptables("-t", "nat", "-N", chain)
 	if err != nil {
 		i.logger.Debug(err.Error())
 	}
+}
 
-	err = i.runIptables("-t", "nat", "-C", "PREROUTING", "-p", req.protocol, "-d", req.lbIp, "--dport", strconv.Itoa(int(req.port)), "-j", preRoutingChain)
-	if err != nil {
-		appendToPreRouting := fmt.Sprintf("-A PREROUTING -p %s -d %s --dport %d -j %s\n", req.protocol, req.lbIp, req.port, preRoutingChain)
-		b.WriteString(appendToPreRouting)
-	}
-	b.WriteString(i.flush(preRoutingChain))
-
-	postRoutingChain := fmt.Sprintf(postRoutingChainNameFormat, req.serviceName)
-	err = i.runIptables("-t", "nat", "-N", postRoutingChain)
-	if err != nil {
-		i.logger.Debug(err.Error())
-	}
-
-	err = i.runIptables("-t", "nat", "-C", "POSTROUTING", "-p", req.protocol, "--dport", strconv.Itoa(int(req.nodePort)), "-j", postRoutingChain)
-	if err != nil {
-		appendToPostRouting := fmt.Sprintf("-A POSTROUTING -p %s --dport %d -j %s\n", req.protocol, req.nodePort, postRoutingChain)
-		b.WriteString(appendToPostRouting)
-	}
-	b.WriteString(i.flush(postRoutingChain))
-
+func (i *iptableImpl) dnat(builder strings.Builder, req *request, chain string) {
 	count := len(req.ips)
 	for i, ip := range req.ips {
 		var dnat string
 		if i == count-1 {
 			dnat = fmt.Sprintf("-A %s -p %s --dport %d -j DNAT --to-destination %s:%d\n",
-				preRoutingChain, req.protocol, req.port, ip, req.nodePort)
+				chain, req.protocol, req.port, ip, req.nodePort)
 		} else {
 			prob := 1.0 / float64(count-i)
 			dnat = fmt.Sprintf("-A %s -p %s --dport %d -m statistic --mode random --probability %.6f -j DNAT --to-destination %s:%d\n",
-				preRoutingChain, req.protocol, req.port, prob, ip, req.nodePort)
+				chain, req.protocol, req.port, prob, ip, req.nodePort)
 		}
 
-		b.WriteString(dnat)
+		builder.WriteString(dnat)
 	}
+}
 
-	snat := fmt.Sprintf("-A %s -p %s --dport %d -j SNAT --to-source %s\n", postRoutingChain, req.protocol, req.nodePort, req.lbIp)
-	b.WriteString(snat)
+func (i *iptableImpl) addChainToPreRouting(builder strings.Builder, req *request, chain string) {
+	err := i.runIptables("-t", "nat", "-C", "PREROUTING", "-p", req.protocol, "-d", req.lbIp, "--dport", strconv.Itoa(int(req.port)), "-j", chain)
+	if err != nil {
+		rule := fmt.Sprintf("-A PREROUTING -p %s -d %s --dport %d -j %s\n", req.protocol, req.lbIp, req.port, chain)
+		builder.WriteString(rule)
+	}
+}
 
-	b.WriteString("COMMIT\n")
+func (i *iptableImpl) addChainToPostRouting(builder strings.Builder, req *request, chain string) {
+	err := i.runIptables("-t", "nat", "-C", "POSTROUTING", "-p", req.protocol, "--dport", strconv.Itoa(int(req.nodePort)), "-j", chain)
+	if err != nil {
+		appendToPostRouting := fmt.Sprintf("-A POSTROUTING -p %s --dport %d -j %s\n", req.protocol, req.nodePort, chain)
+		builder.WriteString(appendToPostRouting)
+	}
+}
 
-	rules := b.String()
-	return i.runIptablesRestore(rules)
+func (i *iptableImpl) snat(builder strings.Builder, req *request, chain string) {
+	rule := fmt.Sprintf("-A %s -p %s --dport %d -j SNAT --to-source %s\n", chain, req.protocol, req.nodePort, req.lbIp)
+	builder.WriteString(rule)
 }
 
 func (i *iptableImpl) runIptablesRestore(rules string) error {
@@ -117,8 +158,4 @@ func (i *iptableImpl) runIptables(rule ...string) error {
 		return fmt.Errorf("iptables failed: %w\nstderr: %s", err, stderr.String())
 	}
 	return nil
-}
-
-func (i *iptableImpl) flush(chain string) string {
-	return fmt.Sprintf("-F %s\n", chain)
 }
