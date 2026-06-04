@@ -5,8 +5,8 @@ import (
 )
 
 type Config struct {
-	LbIp      string
-	GeneralLB *GeneralLBConfig
+	LbIp       string
+	KubeConfig string
 }
 
 func GetConfig() (*Config, error) {

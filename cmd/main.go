@@ -2,7 +2,9 @@ package main
 
 import (
 	"kubelb/configs"
-	"kubelb/internal/lb/nat"
+	"kubelb/internal/ippool"
+	"kubelb/internal/loadbalancer/nat"
+	"kubelb/internal/reconciler"
 	"log"
 	"log/slog"
 	"os"
@@ -14,13 +16,27 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("config: %+v\n", c)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	for _, svc := range c.GeneralLB.Services {
-		nat.NewNatLb(c.LbIp, c.GeneralLB.Protocol, c.GeneralLB.NodesIp, &svc, logger.With("service", svc.Name))
+	logger.Debug("config loaded", "config", c)
+
+	ipPool := ippool.NewStatic([]string{c.LbIp})
+	lb := nat.NewNatLb(logger.With("service", "nat-lb"))
+
+	r, err := reconciler.NewServiceReconciler(lb, ipPool, c.KubeConfig, logger)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	ch := time.After(100 * time.Second)
-	<-ch
+	ch := make(chan struct{}, 1)
+
+	err = r.Reconcile(ch)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	time.Sleep(100 * time.Second)
+	ch <- struct{}{}
+
+	logger.Info("shutting down...")
 }

@@ -15,16 +15,16 @@ const (
 )
 
 type iptableManager interface {
-	sync(req *syncRequest) error
+	sync(req *request) error
 }
 
-type syncRequest struct {
-	svc      string
-	ips      []string
-	lbIp     string
-	protocol string
-	port     int
-	nodePort int
+type request struct {
+	serviceName string
+	ips         []string
+	lbIp        string
+	protocol    string
+	port        int32
+	nodePort    int32
 }
 
 type iptableImpl struct {
@@ -37,31 +37,31 @@ func newIptableManager(logger *slog.Logger) iptableManager {
 	}
 }
 
-func (i *iptableImpl) sync(req *syncRequest) error {
+func (i *iptableImpl) sync(req *request) error {
 	var b strings.Builder
 
 	b.WriteString("*nat\n")
 
-	preRoutingChain := fmt.Sprintf(preRoutingChainNameFormat, req.svc)
+	preRoutingChain := fmt.Sprintf(preRoutingChainNameFormat, req.serviceName)
 	err := i.runIptables("-t", "nat", "-N", preRoutingChain)
 	if err != nil {
-		i.logger.Warn(err.Error())
+		i.logger.Debug(err.Error())
 	}
 
-	err = i.runIptables("-t", "nat", "-C", "PREROUTING", "-p", req.protocol, "--dport", strconv.Itoa(req.port), "-j", preRoutingChain)
+	err = i.runIptables("-t", "nat", "-C", "PREROUTING", "-p", req.protocol, "-d", req.lbIp, "--dport", strconv.Itoa(int(req.port)), "-j", preRoutingChain)
 	if err != nil {
-		appendToPreRouting := fmt.Sprintf("-A PREROUTING -p %s --dport %d -j %s\n", req.protocol, req.port, preRoutingChain)
+		appendToPreRouting := fmt.Sprintf("-A PREROUTING -p %s -d %s --dport %d -j %s\n", req.protocol, req.lbIp, req.port, preRoutingChain)
 		b.WriteString(appendToPreRouting)
 	}
 	b.WriteString(i.flush(preRoutingChain))
 
-	postRoutingChain := fmt.Sprintf(postRoutingChainNameFormat, req.svc)
+	postRoutingChain := fmt.Sprintf(postRoutingChainNameFormat, req.serviceName)
 	err = i.runIptables("-t", "nat", "-N", postRoutingChain)
 	if err != nil {
-		i.logger.Warn(err.Error())
+		i.logger.Debug(err.Error())
 	}
 
-	err = i.runIptables("-t", "nat", "-C", "POSTROUTING", "-p", req.protocol, "--dport", strconv.Itoa(req.nodePort), "-j", postRoutingChain)
+	err = i.runIptables("-t", "nat", "-C", "POSTROUTING", "-p", req.protocol, "--dport", strconv.Itoa(int(req.nodePort)), "-j", postRoutingChain)
 	if err != nil {
 		appendToPostRouting := fmt.Sprintf("-A POSTROUTING -p %s --dport %d -j %s\n", req.protocol, req.nodePort, postRoutingChain)
 		b.WriteString(appendToPostRouting)
