@@ -123,35 +123,42 @@ func (sr *ServiceReconciler) Reconcile(stopCh <-chan struct{}) error {
 func (sr *ServiceReconciler) add(svc *v1.Service) {
 	sr.logger.Info("adding service", "namespace", svc.Namespace, "name", svc.Name)
 	if shouldSetStatus(svc) {
-		sr.setStatus(svc)
+		err := sr.setStatus(svc)
+		if err != nil {
+			sr.logger.Error(err.Error())
+			return
+		}
 	}
 	sr.loadBalancer.Add(svc)
 }
 
-func (sr *ServiceReconciler) update(old, new *v1.Service) {
+func (sr *ServiceReconciler) update(_, new *v1.Service) {
 	sr.logger.Info("updating service", "namespace", new.Namespace, "name", new.Name)
 	sr.loadBalancer.Update(new)
 }
 
 func (sr *ServiceReconciler) delete(svc *v1.Service) {
-	// todo: take back ip
+	ip := svc.Status.LoadBalancer.Ingress[0].IP
+	if ip != "" {
+		sr.ipPool.Take(ip)
+	}
 	sr.logger.Info("deleting service", "namespace", svc.Namespace, "name", svc.Name)
 	sr.loadBalancer.Delete(svc)
 }
 
-func (sr *ServiceReconciler) setStatus(svc *v1.Service) {
+func (sr *ServiceReconciler) setStatus(svc *v1.Service) error {
 	ip, err := sr.ipPool.Get()
 	if err != nil {
-		sr.logger.Error(err.Error())
-		return
+		return err
 	}
 
 	svc.Status.LoadBalancer.Ingress = []v1.LoadBalancerIngress{{IP: ip}}
 	_, err = sr.clientSet.CoreV1().Services(svc.Namespace).UpdateStatus(context.Background(), svc, metav1.UpdateOptions{})
 	if err != nil {
 		sr.logger.Error(err.Error())
-		return
+		return nil
 	}
+	return nil
 }
 
 func shouldSetStatus(svc *v1.Service) bool {
