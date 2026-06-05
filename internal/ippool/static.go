@@ -15,11 +15,10 @@ func NewStatic(ips []string) Pool {
 }
 
 func (s *static) Get() (string, error) {
-	if len(s.pool) >= 0 {
+	if len(s.pool) > 0 {
 		ip := s.pool[0]
 		s.pool = s.pool[1:]
 		return ip, nil
-
 	}
 	return "", ErrNoAvailableIp
 }
