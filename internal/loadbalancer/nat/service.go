@@ -2,6 +2,7 @@ package nat
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -86,6 +87,10 @@ func (s *service) healthCheck(ctx context.Context, n *node) error {
 	return err
 }
 
-func (s *service) logAttr() slog.Attr {
-	return slog.Group("service", "namespace", s.svc.Namespace, "service", s.svc.Name)
+func getServiceLogAttr(s *v1.Service) slog.Attr {
+	return slog.Group("service", "namespace", s.Namespace, "name", s.Name)
+}
+
+func getServiceName(s *v1.Service) string {
+	return fmt.Sprintf("%s-%s", s.Namespace, s.Name)
 }

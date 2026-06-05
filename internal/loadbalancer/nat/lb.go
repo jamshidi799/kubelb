@@ -31,15 +31,15 @@ func NewNatLb(logger *slog.Logger) loadbalancer.LoadBalancer {
 
 func (lb *natLB) Add(svc *v1.Service) {
 	s := newService(svc, lb.nodes)
-	lb.logger.Info("Adding service", s.logAttr())
-	lb.services[svc.Name] = s
+	lb.logger.Info("Adding service", getServiceLogAttr(svc))
+	lb.services[getServiceName(svc)] = s
 	go lb.syncService(s)
 }
 
 func (lb *natLB) Update(svc *v1.Service) {
-	s, ok := lb.services[svc.Name]
+	s, ok := lb.services[getServiceName(svc)]
 	if !ok {
-		lb.logger.Warn("service not found. adding it.", s.logAttr())
+		lb.logger.Warn("service not found. adding it.", getServiceLogAttr(svc))
 		lb.Add(svc)
 		return
 	}
@@ -48,11 +48,12 @@ func (lb *natLB) Update(svc *v1.Service) {
 }
 
 func (lb *natLB) Delete(svc *v1.Service) {
-	s, ok := lb.services[svc.Name]
+	serviceName := getServiceName(svc)
+	s, ok := lb.services[serviceName]
 	if !ok {
-		lb.logger.Warn("invalid delete request. service not found.", s.logAttr())
+		lb.logger.Warn("invalid delete request. service not found.", getServiceLogAttr(svc))
 	}
-	delete(lb.services, svc.Name)
+	delete(lb.services, serviceName)
 	s.stopCh <- struct{}{}
 }
 
@@ -77,7 +78,7 @@ func (lb *natLB) syncService(service *service) {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		lb.logger.Debug("synchronization is starting", service.logAttr())
+		lb.logger.Debug("synchronization is starting", getServiceLogAttr(service.svc))
 
 		var wg sync.WaitGroup
 		ctx, cancel := context.WithTimeout(context.Background(), service.interval)
@@ -92,11 +93,11 @@ func (lb *natLB) syncService(service *service) {
 
 		wg.Wait()
 		cancel()
-		lb.logger.Debug("synchronization completed", service.logAttr())
+		lb.logger.Debug("synchronization completed", getServiceLogAttr(service.svc))
 
 		select {
 		case <-service.stopCh:
-			lb.logger.Info("stopping sync loop", service.logAttr())
+			lb.logger.Info("stopping sync loop", getServiceLogAttr(service.svc))
 			break
 		default:
 
@@ -125,12 +126,12 @@ func (lb *natLB) sync(service *service) {
 	}
 
 	if len(ips) == 0 {
-		lb.logger.Debug("no healthy nodes found", service.logAttr())
+		lb.logger.Debug("no healthy nodes found", getServiceLogAttr(service.svc))
 		return
 	}
 
 	for _, port := range service.svc.Spec.Ports {
-		lb.logger.Debug("applying nodes", service.logAttr(), "port", port.Name)
+		lb.logger.Debug("applying nodes", getServiceLogAttr(service.svc), "port", port.Name)
 
 		err := lb.iptable.sync(&request{
 			serviceName: fmt.Sprintf("%s-%s-%d", service.svc.Namespace, service.svc.Name, port.Port),
@@ -142,7 +143,7 @@ func (lb *natLB) sync(service *service) {
 		})
 
 		if err != nil {
-			lb.logger.Warn("Failed to apply nodes", "err", err, service.logAttr(), "port", port.Name)
+			lb.logger.Warn("Failed to apply nodes", "err", err, getServiceLogAttr(service.svc), "port", port.Name)
 		}
 	}
 
