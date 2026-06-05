@@ -43,7 +43,7 @@ func newService(svc *v1.Service, nodes map[string]string) *service {
 		interval:         defaultInterval,
 		successThreshold: defaultSuccessThreshold,
 		failureThreshold: defaultFailureThreshold,
-		healthChecker:    newHttpHeathChecker("/", http.StatusOK, make(map[string]string)),
+		healthChecker:    newHttpHeathChecker(http.StatusOK, make(map[string]string)),
 	}
 }
 
@@ -64,7 +64,8 @@ type node struct {
 }
 
 func (s *service) healthCheck(ctx context.Context, n *node) error {
-	err := s.healthChecker.check(ctx, n.ip, n.HealthCheckNodePort)
+	domain := fmt.Sprintf("%s:%d", n.ip, n.HealthCheckNodePort)
+	err := s.healthChecker.check(ctx, domain)
 	if err != nil {
 		n.failCount++
 	} else {

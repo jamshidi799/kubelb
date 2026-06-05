@@ -7,26 +7,26 @@ import (
 )
 
 type healthChecker interface {
-	check(ctx context.Context, ip string, port int32) error
+	check(ctx context.Context, addr string) error
 }
 
 type httpHeathChecker struct {
-	path           string
+	client *http.Client
+
 	expectedStatus int
 	httpHeaders    map[string]string
 }
 
-func newHttpHeathChecker(path string, expectedStatus int, httpHeaders map[string]string) healthChecker {
+func newHttpHeathChecker(expectedStatus int, httpHeaders map[string]string) healthChecker {
 	return &httpHeathChecker{
-		path,
-		expectedStatus,
-		httpHeaders,
+		client:         &http.Client{},
+		expectedStatus: expectedStatus,
+		httpHeaders:    httpHeaders,
 	}
 }
 
-func (h httpHeathChecker) check(ctx context.Context, ip string, port int32) error {
-	url := fmt.Sprintf("http://%s:%d%s", ip, port, h.path)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+func (h httpHeathChecker) check(ctx context.Context, addr string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", addr, nil)
 	if err != nil {
 		return err
 	}
@@ -35,8 +35,7 @@ func (h httpHeathChecker) check(ctx context.Context, ip string, port int32) erro
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := h.client.Do(req)
 	if err != nil {
 		return err
 	}
