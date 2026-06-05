@@ -2,6 +2,7 @@ package nat
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -83,4 +84,8 @@ func (s *service) healthCheck(ctx context.Context, n *node) error {
 	}
 
 	return err
+}
+
+func (s *service) logAttr() slog.Attr {
+	return slog.Group("service", "namespace", s.svc.Namespace, "service", s.svc.Name)
 }

@@ -23,7 +23,7 @@ func NewNatLb(logger *slog.Logger) loadbalancer.LoadBalancer {
 		logger:   logger,
 		services: make(map[string]*service),
 		nodes:    make(map[string]string),
-		iptable:  newIptableManager(logger.With("service", "general-natLB.iptableImpl")),
+		iptable:  newIptableManager(logger.With("service", "natLB.iptable")),
 	}
 
 	return lb
@@ -31,6 +31,7 @@ func NewNatLb(logger *slog.Logger) loadbalancer.LoadBalancer {
 
 func (lb *natLB) Add(svc *v1.Service) {
 	s := newService(svc, lb.nodes)
+	lb.logger.Info("Adding service", s.logAttr())
 	lb.services[svc.Name] = s
 	go lb.syncService(s)
 }
@@ -38,7 +39,7 @@ func (lb *natLB) Add(svc *v1.Service) {
 func (lb *natLB) Update(svc *v1.Service) {
 	s, ok := lb.services[svc.Name]
 	if !ok {
-		lb.logger.Warn("service not found. adding it...")
+		lb.logger.Warn("service not found. adding it.", s.logAttr())
 		lb.Add(svc)
 		return
 	}
@@ -49,8 +50,7 @@ func (lb *natLB) Update(svc *v1.Service) {
 func (lb *natLB) Delete(svc *v1.Service) {
 	s, ok := lb.services[svc.Name]
 	if !ok {
-		lb.logger.Warn("invalid delete request. service not found.",
-			slog.Group("service", "namespace", svc.Namespace, "service", svc.Name))
+		lb.logger.Warn("invalid delete request. service not found.", s.logAttr())
 	}
 	delete(lb.services, svc.Name)
 	s.stopCh <- struct{}{}
@@ -77,7 +77,7 @@ func (lb *natLB) syncService(service *service) {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		lb.logger.Info("new synchronization is starting...")
+		lb.logger.Debug("synchronization is starting", service.logAttr())
 
 		var wg sync.WaitGroup
 		ctx, cancel := context.WithTimeout(context.Background(), service.interval)
@@ -92,12 +92,11 @@ func (lb *natLB) syncService(service *service) {
 
 		wg.Wait()
 		cancel()
-		lb.logger.Info("synchronization completed")
+		lb.logger.Debug("synchronization completed", service.logAttr())
 
 		select {
 		case <-service.stopCh:
-			lb.logger.Info("stopping sync loop",
-				slog.Group("service", "namespace", service.svc.Namespace, "name", service.svc.Name))
+			lb.logger.Info("stopping sync loop", service.logAttr())
 			break
 		default:
 
@@ -106,11 +105,11 @@ func (lb *natLB) syncService(service *service) {
 }
 
 func (lb *natLB) checkNodePort(ctx context.Context, svc *service, n *node) {
-	lb.logger.Info("checking node", "node", n.ip, "port", n.HealthCheckNodePort)
+	lb.logger.Debug("checking node", "node", n.ip, "port", n.HealthCheckNodePort)
 	status := n.healthy
 	err := svc.healthCheck(ctx, n)
 	if err != nil {
-		lb.logger.Warn("health check failed", "node", n.ip, "port", n.HealthCheckNodePort)
+		lb.logger.Debug("health check failed", "node", n.ip, "port", n.HealthCheckNodePort)
 	}
 	if status != n.healthy {
 		lb.sync(svc)
@@ -126,12 +125,12 @@ func (lb *natLB) sync(service *service) {
 	}
 
 	if len(ips) == 0 {
-		lb.logger.Info("no healthy nodes found")
+		lb.logger.Debug("no healthy nodes found", service.logAttr())
 		return
 	}
 
 	for _, port := range service.svc.Spec.Ports {
-		lb.logger.Info("applying nodes", "service", service.svc.Name, "port", port.Name)
+		lb.logger.Debug("applying nodes", service.logAttr(), "port", port.Name)
 
 		err := lb.iptable.sync(&request{
 			serviceName: fmt.Sprintf("%s-%s-%d", service.svc.Namespace, service.svc.Name, port.Port),
@@ -143,7 +142,7 @@ func (lb *natLB) sync(service *service) {
 		})
 
 		if err != nil {
-			lb.logger.Warn("Failed to apply nodes", "err", err, "service", service.svc.Name, "port", port.Name)
+			lb.logger.Warn("Failed to apply nodes", "err", err, service.logAttr(), "port", port.Name)
 		}
 	}
 

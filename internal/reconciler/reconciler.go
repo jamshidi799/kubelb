@@ -2,7 +2,6 @@ package reconciler
 
 import (
 	"context"
-	"fmt"
 	"kubelb/internal/ippool"
 	"kubelb/internal/loadbalancer"
 	"kubelb/pkg/k8s"
@@ -115,8 +114,8 @@ func (sr *ServiceReconciler) Reconcile(stopCh <-chan struct{}) error {
 
 	sr.factory.Start(stopCh)
 	sr.factory.WaitForCacheSync(stopCh)
+	sr.logger.Info("starting service reconciler")
 
-	fmt.Println("Informer synced, watching for service changes...")
 	<-stopCh
 	return nil
 }
