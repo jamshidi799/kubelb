@@ -1,4 +1,4 @@
-package nat
+package health
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"net/http"
 )
 
-type healthChecker interface {
-	check(ctx context.Context, addr string) error
+type Checker interface {
+	Check(ctx context.Context, addr string) error
 }
 
 type httpHeathChecker struct {
@@ -17,7 +17,7 @@ type httpHeathChecker struct {
 	httpHeaders    map[string]string
 }
 
-func newHttpHeathChecker(expectedStatus int, httpHeaders map[string]string) healthChecker {
+func NewHttpHeathChecker(expectedStatus int, httpHeaders map[string]string) Checker {
 	return &httpHeathChecker{
 		client:         &http.Client{},
 		expectedStatus: expectedStatus,
@@ -25,7 +25,7 @@ func newHttpHeathChecker(expectedStatus int, httpHeaders map[string]string) heal
 	}
 }
 
-func (h httpHeathChecker) check(ctx context.Context, addr string) error {
+func (h httpHeathChecker) Check(ctx context.Context, addr string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", addr, nil)
 	if err != nil {
 		return err

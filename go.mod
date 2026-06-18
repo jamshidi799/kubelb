@@ -3,6 +3,7 @@ module kubelb
 go 1.26.2
 
 require (
+	github.com/google/go-cmp v0.7.0
 	github.com/spf13/viper v1.21.0
 	k8s.io/api v0.36.1
 	k8s.io/apimachinery v0.36.1

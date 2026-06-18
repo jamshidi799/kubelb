@@ -3,52 +3,37 @@ package reconciler
 import (
 	"context"
 	"kubelb/internal/ippool"
-	"kubelb/internal/loadbalancer"
-	"kubelb/pkg/k8s"
+	"kubelb/internal/lb"
 	"log/slog"
 
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 )
 
 type ServiceReconciler struct {
-	loadBalancer loadbalancer.LoadBalancer
+	loadBalancer lb.LoadBalancer
 	ipPool       ippool.Pool
 
-	clientSet    *kubernetes.Clientset
+	clientSet    kubernetes.Interface
 	svcInformer  cache.SharedIndexInformer
 	nodeInformer cache.SharedIndexInformer
-	factory      informers.SharedInformerFactory
 
 	logger *slog.Logger
 }
 
-func NewServiceReconciler(loadBalancer loadbalancer.LoadBalancer, ipPool ippool.Pool, kubeConfig string, logger *slog.Logger) (*ServiceReconciler, error) {
-	clientSet, err := k8s.BuildClientset(kubeConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	factory := informers.NewSharedInformerFactory(clientSet, 0)
-	svcInformer := factory.Core().V1().Services().Informer()
-	nodeInformer := factory.Core().V1().Nodes().Informer()
-
-	return &ServiceReconciler{
+func NewServiceReconciler(loadBalancer lb.LoadBalancer, ipPool ippool.Pool, clientSet kubernetes.Interface, svcInformer cache.SharedIndexInformer, nodeInformer cache.SharedIndexInformer, logger *slog.Logger) (*ServiceReconciler, error) {
+	sr := &ServiceReconciler{
 		loadBalancer: loadBalancer,
 		ipPool:       ipPool,
 		clientSet:    clientSet,
 		svcInformer:  svcInformer,
 		nodeInformer: nodeInformer,
-		factory:      factory,
 		logger:       logger,
-	}, nil
-}
+	}
 
-func (sr *ServiceReconciler) Reconcile(stopCh <-chan struct{}) error {
-	_, err := sr.svcInformer.AddEventHandler(
+	_, err := svcInformer.AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				svc := obj.(*v1.Service)
@@ -79,18 +64,9 @@ func (sr *ServiceReconciler) Reconcile(stopCh <-chan struct{}) error {
 				}
 			},
 		})
-	if err != nil {
-		return err
-	}
 
-	services, err := sr.clientSet.CoreV1().Services("").List(context.Background(), metav1.ListOptions{})
 	if err != nil {
-		return err
-	}
-	for _, svc := range services.Items {
-		if svc.Spec.Type == v1.ServiceTypeLoadBalancer {
-			sr.add(&svc)
-		}
+		return nil, err
 	}
 
 	_, err = sr.nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -104,22 +80,9 @@ func (sr *ServiceReconciler) Reconcile(stopCh <-chan struct{}) error {
 			sr.loadBalancer.DeleteNode(node.Status.Addresses[0].Address)
 		},
 	})
-	nodes, err := sr.clientSet.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
-	if err != nil {
-		return err
-	}
-	for _, node := range nodes.Items {
-		sr.loadBalancer.AddNode(node.Status.Addresses[0].Address)
-	}
 
-	sr.factory.Start(stopCh)
-	sr.factory.WaitForCacheSync(stopCh)
-	sr.logger.Info("starting service reconciler")
-
-	<-stopCh
-	return nil
+	return sr, err
 }
-
 func (sr *ServiceReconciler) add(svc *v1.Service) {
 	sr.logger.Info("adding service", "namespace", svc.Namespace, "name", svc.Name)
 	if shouldSetStatus(svc) {

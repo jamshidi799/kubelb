@@ -1,14 +1,20 @@
 package main
 
 import (
+	"context"
 	"kubelb/configs"
 	"kubelb/internal/ippool"
-	"kubelb/internal/loadbalancer/nat"
+	"kubelb/internal/lb"
+	"kubelb/internal/lb/backend"
 	"kubelb/internal/reconciler"
+	"kubelb/pkg/k8s"
 	"log"
 	"log/slog"
 	"os"
 	"time"
+
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/tools/cache"
 )
 
 func main() {
@@ -21,22 +27,32 @@ func main() {
 	logger.Debug("config loaded", "config", c)
 
 	ipPool := ippool.NewStatic([]string{c.LbIp})
-	lb := nat.NewNatLb(logger.With("service", "nat-lb"))
+	b := backend.NewNatBackend(logger.With("service", "natLB.backend"))
+	lb := lb.NewLb(b, logger.With("service", "nat-lb"))
 
-	r, err := reconciler.NewServiceReconciler(lb, ipPool, c.KubeConfig, logger)
+	clientSet, err := k8s.BuildClientset(c.KubeConfig)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	ch := make(chan struct{}, 1)
+	factory := informers.NewSharedInformerFactory(clientSet, 0)
+	svcInformer := factory.Core().V1().Services().Informer()
+	nodeInformer := factory.Core().V1().Nodes().Informer()
 
-	err = r.Reconcile(ch)
+	_, err = reconciler.NewServiceReconciler(lb, ipPool, clientSet, svcInformer, nodeInformer, logger)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	factory.Start(ctx.Done())
+	cache.WaitForCacheSync(ctx.Done(),
+		factory.Core().V1().Services().Informer().HasSynced,
+		factory.Core().V1().Nodes().Informer().HasSynced,
+	)
 
 	time.Sleep(100 * time.Second)
-	ch <- struct{}{}
-
+	cancel()
 	logger.Info("shutting down...")
 }

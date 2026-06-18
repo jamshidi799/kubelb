@@ -1,8 +1,9 @@
-package nat
+package lb
 
 import (
 	"context"
 	"fmt"
+	"kubelb/internal/health"
 	"log/slog"
 	"net/http"
 	"time"
@@ -25,7 +26,7 @@ type service struct {
 	successThreshold int
 	failureThreshold int
 
-	healthChecker healthChecker
+	healthChecker health.Checker
 }
 
 func newService(svc *v1.Service, nodes map[string]string) *service {
@@ -43,7 +44,7 @@ func newService(svc *v1.Service, nodes map[string]string) *service {
 		interval:         defaultInterval,
 		successThreshold: defaultSuccessThreshold,
 		failureThreshold: defaultFailureThreshold,
-		healthChecker:    newHttpHeathChecker(http.StatusOK, make(map[string]string)),
+		healthChecker:    health.NewHttpHeathChecker(http.StatusOK, make(map[string]string)),
 	}
 }
 
@@ -65,7 +66,7 @@ type node struct {
 
 func (s *service) healthCheck(ctx context.Context, n *node) error {
 	domain := fmt.Sprintf("%s:%d", n.ip, n.HealthCheckNodePort)
-	err := s.healthChecker.check(ctx, domain)
+	err := s.healthChecker.Check(ctx, domain)
 	if err != nil {
 		n.failCount++
 	} else {

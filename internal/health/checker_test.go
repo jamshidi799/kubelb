@@ -1,4 +1,4 @@
-package nat
+package health
 
 import (
 	"context"
@@ -38,7 +38,7 @@ func TestHttpChecker_check(t *testing.T) {
 	}
 	addr, _ = url.Parse(server.URL)
 
-	err := checker.check(context.Background(), server.URL)
+	err := checker.Check(context.Background(), server.URL)
 	if err != nil {
 		t.Error("Expected", nil, "got", err)
 	}
@@ -60,7 +60,7 @@ func TestHttpChecker_check_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
-	err := checker.check(ctx, server.URL)
+	err := checker.Check(ctx, server.URL)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Error("Expected", nil, "got", err)
 	}
