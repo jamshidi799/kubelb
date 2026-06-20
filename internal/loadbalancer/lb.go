@@ -1,9 +1,9 @@
-package lb
+package loadbalancer
 
 import (
 	"context"
 	"fmt"
-	"kubelb/internal/lb/backend"
+	"kubelb/internal/loadbalancer/backend"
 	"log/slog"
 	"sync"
 	"time"
@@ -115,11 +115,11 @@ func (lb *lb) syncService(service *service) {
 }
 
 func (lb *lb) checkNodePort(ctx context.Context, svc *service, n *node) {
-	lb.logger.Debug("checking node", "node", n.ip, "port", n.HealthCheckNodePort)
+	lb.logger.Debug("checking node", "node", n.ip, "port", n.healthCheckNodePort)
 	status := n.healthy
 	err := svc.healthCheck(ctx, n)
 	if err != nil {
-		lb.logger.Debug("health Check failed", "node", n.ip, "port", n.HealthCheckNodePort)
+		lb.logger.Debug("health Check failed", "err", err, "node", n.ip, "port", n.healthCheckNodePort)
 	}
 	if status != n.healthy {
 		lb.sync(svc)
@@ -152,7 +152,7 @@ func (lb *lb) sync(service *service) {
 		})
 
 		if err != nil {
-			lb.logger.Warn("Failed to apply nodes", "err", err, getServiceLogAttr(service.svc), "port", port.Name)
+			lb.logger.Error("Failed to apply nodes", "err", err, getServiceLogAttr(service.svc), "port", port.Name)
 		}
 	}
 

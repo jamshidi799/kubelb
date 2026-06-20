@@ -3,7 +3,7 @@ package reconciler
 import (
 	"context"
 	"kubelb/internal/ippool"
-	"kubelb/internal/lb"
+	"kubelb/internal/loadbalancer"
 	"log/slog"
 	"testing"
 	"time"
@@ -57,7 +57,7 @@ func read[T *v1.Service | string](ctx context.Context, ch <-chan T) (T, error) {
 	}
 }
 
-func newTestReconciler(t *testing.T, ctx context.Context, lb lb.LoadBalancer, ipp ippool.Pool, client *fake.Clientset) *ServiceReconciler {
+func newTestReconciler(t *testing.T, ctx context.Context, lb loadbalancer.LoadBalancer, ipp ippool.Pool, client *fake.Clientset) *ServiceReconciler {
 	t.Helper()
 
 	factory := informers.NewSharedInformerFactory(client, 0)

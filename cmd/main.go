@@ -4,8 +4,8 @@ import (
 	"context"
 	"kubelb/configs"
 	"kubelb/internal/ippool"
-	"kubelb/internal/lb"
-	"kubelb/internal/lb/backend"
+	"kubelb/internal/loadbalancer"
+	"kubelb/internal/loadbalancer/backend"
 	"kubelb/internal/reconciler"
 	"kubelb/pkg/k8s"
 	"log"
@@ -27,8 +27,9 @@ func main() {
 	logger.Debug("config loaded", "config", c)
 
 	ipPool := ippool.NewStatic([]string{c.LbIp})
-	b := backend.NewNatBackend(logger.With("service", "natLB.backend"))
-	lb := lb.NewLb(b, logger.With("service", "nat-lb"))
+	//b := backend.NewNatBackend(logger.With("service", "nat.backend"))
+	b := backend.NewHaproxyBackend(logger.With("service", "haproxy.backend"))
+	lb := loadbalancer.NewLb(b, logger.With("service", "lb"))
 
 	clientSet, err := k8s.BuildClientset(c.KubeConfig)
 	if err != nil {
@@ -52,7 +53,7 @@ func main() {
 		factory.Core().V1().Nodes().Informer().HasSynced,
 	)
 
-	time.Sleep(100 * time.Second)
+	time.Sleep(10 * time.Minute)
 	cancel()
 	logger.Info("shutting down...")
 }

@@ -3,7 +3,7 @@ package reconciler
 import (
 	"context"
 	"kubelb/internal/ippool"
-	"kubelb/internal/lb"
+	"kubelb/internal/loadbalancer"
 	"log/slog"
 
 	"k8s.io/api/core/v1"
@@ -13,7 +13,7 @@ import (
 )
 
 type ServiceReconciler struct {
-	loadBalancer lb.LoadBalancer
+	loadBalancer loadbalancer.LoadBalancer
 	ipPool       ippool.Pool
 
 	clientSet    kubernetes.Interface
@@ -23,7 +23,7 @@ type ServiceReconciler struct {
 	logger *slog.Logger
 }
 
-func NewServiceReconciler(loadBalancer lb.LoadBalancer, ipPool ippool.Pool, clientSet kubernetes.Interface, svcInformer cache.SharedIndexInformer, nodeInformer cache.SharedIndexInformer, logger *slog.Logger) (*ServiceReconciler, error) {
+func NewServiceReconciler(loadBalancer loadbalancer.LoadBalancer, ipPool ippool.Pool, clientSet kubernetes.Interface, svcInformer cache.SharedIndexInformer, nodeInformer cache.SharedIndexInformer, logger *slog.Logger) (*ServiceReconciler, error) {
 	sr := &ServiceReconciler{
 		loadBalancer: loadBalancer,
 		ipPool:       ipPool,
