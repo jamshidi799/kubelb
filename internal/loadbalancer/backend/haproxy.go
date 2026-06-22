@@ -22,6 +22,8 @@ const (
 	backendParentType  = "backend"
 )
 
+var ErrSyncFailed = errors.New("sync failed")
+
 type haproxy struct {
 	client client_native.HAProxyClient
 	mu     sync.Mutex
@@ -34,14 +36,10 @@ func NewHaproxyBackend(logger *slog.Logger) Backend {
 		logger.Error(err.Error())
 		return nil
 	}
-	logger.Info("creating haproxy backend")
 	h := &haproxy{
 		client: client,
 		logger: logger,
 	}
-	//if err := h.test(); err != nil {
-	//	logger.Error(err.Error())
-	//}
 	return h
 }
 
@@ -49,141 +47,137 @@ func (h *haproxy) Sync(req *Request) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.logger.Info("start syncing request", "service", req.ServiceName, "ips", req.Ips)
-	conf, err := h.client.Configuration()
+	h.logger.Info("start syncing", "service", req.ServiceName, "ips", req.Ips)
+	conf, err := h.getConfiguration()
 	if err != nil {
-		return err
+		h.logger.Error(err.Error())
+		return ErrSyncFailed
 	}
 
-	shouldCommit := false
 	txId, err := h.startTransaction(conf)
-
-	_, _, err = conf.GetFrontend(getFrontendName(req.ServiceName), "")
 	if err != nil {
-		// create
-		if !errors.Is(err, configuration.ErrObjectDoesNotExist) {
-			return err
-		}
-		h.logger.Debug("create triggered", "service", req.ServiceName)
-		err = h.create(req, conf, txId)
-		if err != nil {
-			err = conf.DeleteTransaction(txId)
-			return err
-		}
-		shouldCommit = true
-	} else {
-		// sync
-		h.logger.Debug("sync triggered", "service", req.ServiceName)
-		if h.shouldSyncBind(req, conf) {
-			if err = h.syncBind(req, conf, txId); err != nil {
-				return err
-			}
-			shouldCommit = true
-		}
-
-		if h.shouldSyncServers(req, conf, txId) {
-			if err = h.syncServers(req, conf, txId); err != nil {
-				return err
-			}
-			shouldCommit = true
-		}
+		h.logger.Error(err.Error())
+		return ErrSyncFailed
 	}
-
-	if shouldCommit {
-		tx, err := conf.CommitTransaction(txId)
+	shouldCommit := false
+	defer func() {
+		err := h.commitOrDeleteTransaction(req, conf, txId, shouldCommit)
 		if err != nil {
 			h.logger.Error(err.Error())
-			return err
 		}
-		h.logger.Info("committed", "service", req.ServiceName, "ips", req.Ips, "tx", tx.Status)
-		if err = h.reload(); err != nil {
-			return err
-		}
+	}()
+
+	shouldCommit, err = h.createOrUpdate(req, conf, txId)
+	if err != nil {
+		h.logger.Error(err.Error())
+		return ErrSyncFailed
+	}
+	return err
+}
+
+func (h *haproxy) createOrUpdate(req *Request, conf configuration.Configuration, txId string) (bool, error) {
+	shouldCommit := false
+
+	_, _, err := conf.GetFrontend(getFrontendName(req.ServiceName), "")
+
+	switch {
+	case err == nil:
+		h.logger.Debug("triggering update", "service", req.ServiceName)
+		shouldCommit = h.update(req, conf, txId)
+	case errors.Is(err, configuration.ErrObjectDoesNotExist):
+		h.logger.Debug("triggering create", "service", req.ServiceName)
+		shouldCommit = h.create(req, conf, txId)
+	default:
+		return false, err
 	}
 
+	return shouldCommit, nil
+}
+
+func (h *haproxy) create(req *Request, conf configuration.Configuration, txId string) (shouldCommit bool) {
+	if err := h.createFrontend(req, conf, txId); err != nil {
+		h.logger.Error("frontend create failed", "err", err)
+		return false
+	}
+
+	if err := h.createBind(req, conf, txId); err != nil {
+		h.logger.Error("bind create failed", "err", err)
+		return false
+	}
+
+	if err := h.createBackend(req, conf, txId); err != nil {
+		h.logger.Error("backend create failed", "err", err)
+		return false
+	}
+
+	if err := h.updateServers(req, conf, txId); err != nil {
+		h.logger.Error("servers update failed", "err", err)
+		return false
+	}
+
+	return true
+}
+
+func (h *haproxy) update(req *Request, conf configuration.Configuration, txId string) (shouldCommit bool) {
+	if h.shouldUpdateFrontend(req, conf) {
+		if err := h.updateFrontend(req, conf, txId); err != nil {
+			h.logger.Error("frontend update failed", "err", err)
+			return false
+		}
+		shouldCommit = true
+	}
+
+	if h.shouldUpdateBind(req, conf) {
+		if err := h.updateBind(req, conf, txId); err != nil {
+			h.logger.Error("bind update failed", "err", err)
+			return false
+		}
+		shouldCommit = true
+	}
+
+	if h.shouldUpdateServers(req, conf, txId) {
+		if err := h.updateServers(req, conf, txId); err != nil {
+			h.logger.Error("servers update failed", "err", err)
+			return false
+		}
+		shouldCommit = true
+	}
+
+	return shouldCommit
+}
+
+func (h *haproxy) shouldUpdateFrontend(req *Request, conf configuration.Configuration) bool {
+	_, fr, err := conf.GetFrontend(getFrontendName(req.ServiceName), "")
+	if err != nil {
+		h.logger.Error("error getting frontend", "err", err.Error())
+		return true
+	}
+
+	if fr.Mode != strings.ToLower(req.Protocol) {
+		return true
+	}
+
+	return false
+}
+
+func (h *haproxy) updateFrontend(req *Request, conf configuration.Configuration, txId string) error {
+	// todo
 	return nil
 }
 
-func (h *haproxy) create(req *Request, conf configuration.Configuration, txId string) error {
+func (h *haproxy) createFrontend(req *Request, conf configuration.Configuration, txId string) error {
 	frontend := getFrontendName(req.ServiceName)
 	backend := getBackendName(req.ServiceName)
-
-	err := conf.CreateFrontend(&models.Frontend{
+	return conf.CreateFrontend(&models.Frontend{
 		FrontendBase: models.FrontendBase{
 			Name:           frontend,
 			Mode:           strings.ToLower(req.Protocol),
 			DefaultBackend: backend,
 		},
 	}, txId, 0)
-	if err != nil {
-		return err
-	}
-
-	err = h.createBind(req, conf, txId)
-
-	balance := models.BalanceAlgorithmRoundrobin
-	err = conf.CreateBackend(&models.Backend{
-		BackendBase: models.BackendBase{
-			Name: backend,
-			Mode: strings.ToLower(req.Protocol),
-			Balance: &models.Balance{
-				Algorithm: &balance,
-			},
-		},
-	}, txId, 0)
-
-	err = h.syncServers(req, conf, txId)
-
-	return err
 }
 
-//func (h *haproxy) test() error {
-//	conf, err := h.client.Configuration()
-//	if err != nil {
-//		return err
-//	}
-//	_, frontends, err := conf.GetFrontends("")
-//	if err != nil {
-//		return err
-//	}
-//
-//	for _, fr := range frontends {
-//		h.logger.Info("frontend", "name", fr.Name, "backend", fr.DefaultBackend, "binds", fr.Binds, "mode", fr.Mode)
-//		bind, err := h.getBind(conf, "http_front")
-//		if err != nil {
-//			h.logger.Error(err.Error())
-//		}
-//		h.logger.Info("bind", "frontend", "http_front", "name", bind.Nice, "address", bind.Address, "port", bind.Port)
-//	}
-//
-//	return nil
-//}
-
-func (h *haproxy) getBind(conf configuration.Configuration, frontName string) (*models.Bind, error) {
-	_, binds, err := conf.GetBinds(frontendParentType, frontName, "")
-	if err != nil {
-		return nil, err
-	}
-	if len(binds) == 0 {
-		return nil, errors.New(fmt.Sprintf("invalid bind count: %d", len(binds)))
-	}
-	return binds[0], nil
-
-}
-
-func (h *haproxy) startTransaction(conf configuration.Configuration) (string, error) {
-	version, err := conf.GetVersion("")
-	if err != nil {
-		return "", err
-	}
-	txID, err := conf.StartTransaction(version)
-	if err != nil {
-		return "", err
-	}
-	return txID.ID, nil
-}
-
-func (h *haproxy) shouldSyncBind(req *Request, conf configuration.Configuration) bool {
+func (h *haproxy) shouldUpdateBind(req *Request, conf configuration.Configuration) bool {
 	frontendName := getFrontendName(req.ServiceName)
 	bind, err := h.getBind(conf, frontendName)
 	if err != nil {
@@ -198,7 +192,7 @@ func (h *haproxy) shouldSyncBind(req *Request, conf configuration.Configuration)
 	return false
 }
 
-func (h *haproxy) syncBind(req *Request, conf configuration.Configuration, txId string) error {
+func (h *haproxy) updateBind(req *Request, conf configuration.Configuration, txId string) error {
 	frontend := getFrontendName(req.ServiceName)
 	bind, err := h.getBind(conf, frontend)
 	if err != nil {
@@ -229,7 +223,19 @@ func (h *haproxy) editBind(bind *models.Bind, req *Request, conf configuration.C
 	return err
 }
 
-func (h *haproxy) shouldSyncServers(req *Request, conf configuration.Configuration, txId string) bool {
+func (h *haproxy) getBind(conf configuration.Configuration, frontName string) (*models.Bind, error) {
+	_, binds, err := conf.GetBinds(frontendParentType, frontName, "")
+	if err != nil {
+		return nil, err
+	}
+	if len(binds) == 0 {
+		return nil, errors.New(fmt.Sprintf("invalid bind count: %d", len(binds)))
+	}
+	return binds[0], nil
+
+}
+
+func (h *haproxy) shouldUpdateServers(req *Request, conf configuration.Configuration, txId string) bool {
 	backend := getBackendName(req.ServiceName)
 	_, servers, err := conf.GetServers(backendParentType, backend, txId)
 	if err != nil {
@@ -258,7 +264,7 @@ func (h *haproxy) shouldSyncServers(req *Request, conf configuration.Configurati
 	return false
 }
 
-func (h *haproxy) syncServers(req *Request, conf configuration.Configuration, txId string) error {
+func (h *haproxy) updateServers(req *Request, conf configuration.Configuration, txId string) error {
 	backend := getBackendName(req.ServiceName)
 	_, servers, err := conf.GetServers(backendParentType, backend, txId)
 	if err != nil {
@@ -293,6 +299,48 @@ func (h *haproxy) syncServers(req *Request, conf configuration.Configuration, tx
 	return nil
 }
 
+func (h *haproxy) startTransaction(conf configuration.Configuration) (string, error) {
+	version, err := conf.GetVersion("")
+	if err != nil {
+		return "", err
+	}
+	txID, err := conf.StartTransaction(version)
+	if err != nil {
+		return "", err
+	}
+	return txID.ID, nil
+}
+
+func (h *haproxy) commitOrDeleteTransaction(req *Request, conf configuration.Configuration, txId string, shouldCommit bool) error {
+	if shouldCommit {
+		if err := h.commitTransaction(req, conf, txId); err != nil {
+			return err
+		}
+	} else {
+		if err := h.deleteTransaction(conf, txId); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *haproxy) deleteTransaction(conf configuration.Configuration, txId string) error {
+	return conf.DeleteTransaction(txId)
+}
+
+func (h *haproxy) commitTransaction(req *Request, conf configuration.Configuration, txId string) error {
+	tx, err := conf.CommitTransaction(txId)
+	if err != nil {
+		h.logger.Error(err.Error())
+		return err
+	}
+	h.logger.Info("committed", "service", req.ServiceName, "ips", req.Ips, "tx", tx.Status)
+	if err = h.reload(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (h *haproxy) reload() error {
 	h.logger.Info("reloading configuration")
 	r, err := h.client.Runtime()
@@ -304,10 +352,27 @@ func (h *haproxy) reload() error {
 	return err
 }
 
+func (h *haproxy) createBackend(req *Request, conf configuration.Configuration, txId string) error {
+	backend := getBackendName(req.ServiceName)
+	balance := models.BalanceAlgorithmRoundrobin
+	return conf.CreateBackend(&models.Backend{
+		BackendBase: models.BackendBase{
+			Name: backend,
+			Mode: strings.ToLower(req.Protocol),
+			Balance: &models.Balance{
+				Algorithm: &balance,
+			},
+		},
+	}, txId, 0)
+}
+
+func (h *haproxy) getConfiguration() (configuration.Configuration, error) {
+	return h.client.Configuration()
+}
+
 func newClient() (client_native.HAProxyClient, error) {
 	ctx := context.Background()
 
-	// 1. Configuration client
 	confClient, err := configuration.New(ctx,
 		cfg_opt.ConfigurationFile("/etc/haproxy/haproxy.cfg"),
 		cfg_opt.HAProxyBin("/usr/sbin/haproxy"),
@@ -319,7 +384,6 @@ func newClient() (client_native.HAProxyClient, error) {
 		return nil, err
 	}
 
-	// 2. Runtime client (stats socket)
 	runtimeClient, err := runtime.New(ctx,
 		runtime_options.MasterSocket("/var/run/haproxy-master.sock"),
 	)
@@ -327,7 +391,6 @@ func newClient() (client_native.HAProxyClient, error) {
 		return nil, err
 	}
 
-	// 3. Combine into top-level client
 	client, err := client_native.New(ctx,
 		options.Configuration(confClient),
 		options.Runtime(runtimeClient),
